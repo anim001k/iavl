@@ -58,9 +58,12 @@ type SimMachine struct {
 
 var _ rapid.StateMachine = &SimMachine{}
 
-func (s SimMachine) Check(_ *rapid.T) {}
+func (s *SimMachine) Check(t *rapid.T) {
+	// after every operation we check that both trees are identical
+	s.compareIterators(t, nil, nil, true)
+}
 
-func (s SimMachine) Set(t *rapid.T) {
+func (s *SimMachine) Set(t *rapid.T) {
 	// choose either a new or an existing key
 	key := s.selectKey(t)
 	value := rapid.SliceOfN(rapid.Byte(), 0, 10).Draw(t, "value")
@@ -81,7 +84,7 @@ func (s SimMachine) Set(t *rapid.T) {
 	s.existingKeys[string(key)] = value // mark as existing
 }
 
-func (s SimMachine) Get(t *rapid.T) {
+func (s *SimMachine) Get(t *rapid.T) {
 	var key = s.selectKey(t)
 	valueV1, errV1 := s.treeV1.Get(key)
 	require.NoError(t, errV1, "failed to get key from V1 tree")
@@ -96,7 +99,7 @@ func (s SimMachine) Get(t *rapid.T) {
 	}
 }
 
-func (s SimMachine) selectKey(t *rapid.T) []byte {
+func (s *SimMachine) selectKey(t *rapid.T) []byte {
 	if len(s.existingKeys) > 0 && rapid.Bool().Draw(t, "existingKey") {
 		return []byte(rapid.SampledFrom(maps.Keys(s.existingKeys)).Draw(t, "key"))
 	} else {
@@ -104,7 +107,7 @@ func (s SimMachine) selectKey(t *rapid.T) []byte {
 	}
 }
 
-func (s SimMachine) Delete(t *rapid.T) {
+func (s *SimMachine) Delete(t *rapid.T) {
 	key := s.selectKey(t)
 	existingValue, found := s.existingKeys[string(key)]
 	exists := found && existingValue != nil
@@ -122,4 +125,53 @@ func (s SimMachine) Delete(t *rapid.T) {
 	//}
 	require.Equal(t, exists, removedV1, "removed status should match existence of key")
 	s.existingKeys[string(key)] = nil // mark as deleted
+}
+
+func (s *SimMachine) Iterate(t *rapid.T) {
+	start := s.selectKey(t)
+	end := s.selectKey(t)
+	// make sure end is after start
+	if string(end) <= string(start) {
+		temp := start
+		start = end
+		end = temp
+	}
+
+	if rapid.Bool().Draw(t, "emptyRange") {
+		start = nil
+		end = nil
+	}
+
+	ascending := rapid.Bool().Draw(t, "ascending")
+
+	s.compareIterators(t, start, end, ascending)
+}
+
+func (s *SimMachine) compareIterators(t *rapid.T, start, end []byte, ascending bool) {
+	iterV1, errV1 := s.treeV1.Iterator(start, end, ascending)
+	require.NoError(t, errV1, "failed to create iterator for V1 tree")
+	defer func() {
+		require.NoError(t, iterV1.Close(), "failed to close iterator for V1 tree")
+	}()
+	iterV2, errV2 := s.treeV2.Iterator(start, end, ascending)
+	require.NoError(t, errV2, "failed to create iterator for V2 tree")
+	defer func() {
+		require.NoError(t, iterV2.Close(), "failed to close iterator for V2 tree")
+	}()
+	for {
+		hasNextV1 := iterV1.Valid()
+		hasNextV2 := iterV2.Valid()
+		require.Equal(t, hasNextV1, hasNextV2, "iterator validity mismatch between V1 and V2 trees")
+		if !hasNextV1 {
+			break
+		}
+		keyV1 := iterV1.Key()
+		valueV1 := iterV1.Value()
+		keyV2 := iterV2.Key()
+		valueV2 := iterV2.Value()
+		require.Equal(t, keyV1, keyV2, "key mismatch between V1 and V2 trees")
+		require.Equal(t, valueV1, valueV2, "value mismatch between V1 and V2 trees")
+		iterV1.Next()
+		iterV2.Next()
+	}
 }
