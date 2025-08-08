@@ -103,6 +103,7 @@ func (s *SimMachine) selectKey(t *rapid.T) []byte {
 	if len(s.existingKeys) > 0 && rapid.Bool().Draw(t, "existingKey") {
 		return []byte(rapid.SampledFrom(maps.Keys(s.existingKeys)).Draw(t, "key"))
 	} else {
+		// TODO consider testing longer keys
 		return rapid.SliceOfN(rapid.Byte(), 0, 10).Draw(t, "key")
 	}
 }
@@ -137,10 +138,7 @@ func (s *SimMachine) Iterate(t *rapid.T) {
 		end = temp
 	}
 
-	if rapid.Bool().Draw(t, "emptyRange") {
-		start = nil
-		end = nil
-	}
+	// TODO add cases where we nudge start or end up or down a little
 
 	ascending := rapid.Bool().Draw(t, "ascending")
 
@@ -150,14 +148,18 @@ func (s *SimMachine) Iterate(t *rapid.T) {
 func (s *SimMachine) compareIterators(t *rapid.T, start, end []byte, ascending bool) {
 	iterV1, errV1 := s.treeV1.Iterator(start, end, ascending)
 	require.NoError(t, errV1, "failed to create iterator for V1 tree")
-	defer func() {
-		require.NoError(t, iterV1.Close(), "failed to close iterator for V1 tree")
-	}()
-	iterV2, errV2 := s.treeV2.Iterator(start, end, ascending)
+	defer require.NoError(t, iterV1.Close(), "failed to close iterator for V1 tree")
+
+	var iterV2 Iterator
+	var errV2 error
+	if ascending {
+		iterV2, errV2 = s.treeV2.Iterator(start, end, false)
+	} else {
+		iterV2, errV2 = s.treeV2.ReverseIterator(start, end)
+	}
 	require.NoError(t, errV2, "failed to create iterator for V2 tree")
-	defer func() {
-		require.NoError(t, iterV2.Close(), "failed to close iterator for V2 tree")
-	}()
+	defer require.NoError(t, iterV2.Close(), "failed to close iterator for V2 tree")
+
 	for {
 		hasNextV1 := iterV1.Valid()
 		hasNextV2 := iterV2.Valid()
