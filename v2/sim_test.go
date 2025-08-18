@@ -4,6 +4,7 @@ import (
 	"os"
 	"testing"
 
+	corestore "cosmossdk.io/core/store"
 	"cosmossdk.io/log"
 	"github.com/cosmos/iavl"
 	dbm "github.com/cosmos/iavl/db"
@@ -46,6 +47,7 @@ func testIAVLV2Sims(t *rapid.T) {
 		existingKeys: map[string][]byte{},
 	}
 
+	// TODO switch from StateMachineActions to manually setting up the actions map, this is going to be too magical for other maintainers otherwise
 	t.Repeat(rapid.StateMachineActions(simMachine))
 }
 
@@ -145,17 +147,46 @@ func (s *SimMachine) Iterate(t *rapid.T) {
 	s.compareIterators(t, start, end, ascending)
 }
 
+func (s *SimMachine) Commit(t *rapid.T) {
+	hash1, v1, err := s.treeV1.SaveVersion()
+	require.NoError(t, err, "failed to save version in V1 tree")
+	hash2, v2, err := s.treeV2.SaveVersion()
+	require.NoError(t, err, "failed to save version in V2 tree")
+	require.Equal(t, hash1, hash2, "hash mismatch between V1 and V2 trees")
+	require.Equal(t, v1, v2, "version mismatch between V1 and V2 trees")
+}
+
+func (s *SimMachine) CheckoutVersion(t *rapid.T) {
+	s.Commit(t) // make sure we've committed the current version before checking out a previous one
+	curVersion := s.treeV1.Version()
+	version := rapid.Int64Range(1, curVersion-1).Draw(t, "version")
+	itreeV1, err := s.treeV1.GetImmutable(version)
+	require.NoError(t, err, "failed to get immutable tree for V1 tree")
+	err = s.treeV2.LoadVersion(version)
+	require.NoError(t, err, "failed to load version in V2 tree")
+	s.compareIterators(t, nil, nil, true)
+	compareIteratorsAtVersion(t, itreeV1, s.treeV2, nil, nil, true)
+	err = s.treeV2.LoadVersion(curVersion)
+	require.NoError(t, err, "failed to reload current version in V2 tree")
+}
+
 func (s *SimMachine) compareIterators(t *rapid.T, start, end []byte, ascending bool) {
-	iterV1, errV1 := s.treeV1.Iterator(start, end, ascending)
+	compareIteratorsAtVersion(t, s.treeV1, s.treeV2, start, end, ascending)
+}
+
+func compareIteratorsAtVersion(t *rapid.T, treeV1 interface {
+	Iterator(start, end []byte, ascending bool) (corestore.Iterator, error)
+}, treeV2 *Tree, start, end []byte, ascending bool) {
+	iterV1, errV1 := treeV1.Iterator(start, end, ascending)
 	require.NoError(t, errV1, "failed to create iterator for V1 tree")
 	defer require.NoError(t, iterV1.Close(), "failed to close iterator for V1 tree")
 
 	var iterV2 Iterator
 	var errV2 error
 	if ascending {
-		iterV2, errV2 = s.treeV2.Iterator(start, end, false)
+		iterV2, errV2 = treeV2.Iterator(start, end, false)
 	} else {
-		iterV2, errV2 = s.treeV2.ReverseIterator(start, end)
+		iterV2, errV2 = treeV2.ReverseIterator(start, end)
 	}
 	require.NoError(t, errV2, "failed to create iterator for V2 tree")
 	defer require.NoError(t, iterV2.Close(), "failed to close iterator for V2 tree")
