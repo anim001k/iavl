@@ -96,4 +96,9 @@ In `leaf` table and `tree_{version}` tables, the `bytes` field is encoded as fol
 ## Loading a Version
 
 * get list of versions which are marked as checkpoints
-* 
+* load the first checkpoint before or at the target version
+* replay all `leaf` and `leaf_delete` entries from that checkpoint version up to the target version
+
+## Eviction
+
+When a tree is checkpointed, nodes at a height >= eviction height are removed from memory.
