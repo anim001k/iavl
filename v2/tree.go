@@ -296,6 +296,7 @@ func (tree *Tree) Get(key []byte) ([]byte, error) {
 		err error
 	)
 	if tree.storeLatestLeaves {
+		// TODO: I think this is a logic error if we are not at the latest version
 		res, err = tree.sql.GetLatestLeaf(key)
 	} else {
 		if tree.root == nil {

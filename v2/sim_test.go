@@ -1,6 +1,7 @@
 package iavl
 
 import (
+	"fmt"
 	"os"
 	"testing"
 
@@ -39,6 +40,7 @@ func testIAVLV2Sims(t *rapid.T) {
 	require.NoError(t, err, "failed to create SQLite database")
 
 	treeOpts := DefaultTreeOptions()
+	//treeOpts.CheckpointInterval = 1
 
 	treeV2 := NewTree(sqliteDb, nodePool, treeOpts)
 	simMachine := &SimMachine{
@@ -63,6 +65,13 @@ var _ rapid.StateMachine = &SimMachine{}
 func (s *SimMachine) Check(t *rapid.T) {
 	// after every operation we check that both trees are identical
 	s.compareIterators(t, nil, nil, true)
+}
+
+func (s *SimMachine) SetN(t *rapid.T) {
+	n := rapid.IntRange(1, 10).Draw(t, "n")
+	for i := 0; i < n; i++ {
+		s.Set(t)
+	}
 }
 
 func (s *SimMachine) Set(t *rapid.T) {
@@ -154,9 +163,29 @@ func (s *SimMachine) Commit(t *rapid.T) {
 	require.NoError(t, err, "failed to save version in V2 tree")
 	require.Equal(t, hash1, hash2, "hash mismatch between V1 and V2 trees")
 	require.Equal(t, v1, v2, "version mismatch between V1 and V2 trees")
+	s.debugDumpTree(t)
+}
+
+func (s *SimMachine) debugDumpTree(t *rapid.T) {
+	version := s.treeV1.Version()
+	dumpStr := fmt.Sprintf("Tree dump for version %d", version)
+	iter, err := s.treeV1.Iterator(nil, nil, true)
+	require.NoError(t, err, "failed to create iterator")
+	defer require.NoError(t, iter.Close(), "failed to close iterator")
+	for iter.Valid() {
+		key := iter.Key()
+		value := iter.Value()
+		dumpStr += fmt.Sprintf("\n\tKey: %X, Value: %X", key, value)
+		iter.Next()
+	}
+	t.Log(dumpStr)
 }
 
 func (s *SimMachine) CheckoutVersion(t *rapid.T) {
+	if s.treeV1.Version() <= 1 {
+		// cannot checkout version 1 or lower
+		return
+	}
 	s.Commit(t) // make sure we've committed the current version before checking out a previous one
 	curVersion := s.treeV1.Version()
 	version := rapid.Int64Range(1, curVersion-1).Draw(t, "version")
@@ -164,10 +193,12 @@ func (s *SimMachine) CheckoutVersion(t *rapid.T) {
 	require.NoError(t, err, "failed to get immutable tree for V1 tree")
 	err = s.treeV2.LoadVersion(version)
 	require.NoError(t, err, "failed to load version in V2 tree")
+	defer require.NoError(t, s.treeV2.LoadVersion(curVersion), "failed to reload current version in V2 tree")
+
+	s.debugDumpTree(t)
+
 	s.compareIterators(t, nil, nil, true)
 	compareIteratorsAtVersion(t, itreeV1, s.treeV2, nil, nil, true)
-	err = s.treeV2.LoadVersion(curVersion)
-	require.NoError(t, err, "failed to reload current version in V2 tree")
 }
 
 func (s *SimMachine) compareIterators(t *rapid.T, start, end []byte, ascending bool) {
