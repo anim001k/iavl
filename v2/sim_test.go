@@ -50,7 +50,13 @@ func testIAVLV2Sims(t *rapid.T) {
 	}
 
 	// TODO switch from StateMachineActions to manually setting up the actions map, this is going to be too magical for other maintainers otherwise
-	t.Repeat(rapid.StateMachineActions(simMachine))
+	t.Repeat(map[string]func(*rapid.T){
+		"":        simMachine.Check,
+		"UpdateN": simMachine.UpdateN,
+		"GetN":    simMachine.GetN,
+		"Iterate": simMachine.Iterate,
+		"Commit":  simMachine.Commit,
+	})
 }
 
 type SimMachine struct {
@@ -60,21 +66,31 @@ type SimMachine struct {
 	existingKeys map[string][]byte
 }
 
-var _ rapid.StateMachine = &SimMachine{}
-
 func (s *SimMachine) Check(t *rapid.T) {
 	// after every operation we check that both trees are identical
 	s.compareIterators(t, nil, nil, true)
 }
 
-func (s *SimMachine) SetN(t *rapid.T) {
-	n := rapid.IntRange(1, 10).Draw(t, "n")
+func (s *SimMachine) UpdateN(t *rapid.T) {
+	n := rapid.IntRange(1, 1000).Draw(t, "n")
 	for i := 0; i < n; i++ {
-		s.Set(t)
+		del := rapid.Bool().Draw(t, "del")
+		if del {
+			s.delete(t)
+		} else {
+			s.set(t)
+		}
 	}
 }
 
-func (s *SimMachine) Set(t *rapid.T) {
+func (s *SimMachine) GetN(t *rapid.T) {
+	n := rapid.IntRange(1, 1000).Draw(t, "n")
+	for i := 0; i < n; i++ {
+		s.get(t)
+	}
+}
+
+func (s *SimMachine) set(t *rapid.T) {
 	// choose either a new or an existing key
 	key := s.selectKey(t)
 	value := rapid.SliceOfN(rapid.Byte(), 0, 10).Draw(t, "value")
@@ -95,7 +111,7 @@ func (s *SimMachine) Set(t *rapid.T) {
 	s.existingKeys[string(key)] = value // mark as existing
 }
 
-func (s *SimMachine) Get(t *rapid.T) {
+func (s *SimMachine) get(t *rapid.T) {
 	var key = s.selectKey(t)
 	valueV1, errV1 := s.treeV1.Get(key)
 	require.NoError(t, errV1, "failed to get key from V1 tree")
@@ -119,7 +135,7 @@ func (s *SimMachine) selectKey(t *rapid.T) []byte {
 	}
 }
 
-func (s *SimMachine) Delete(t *rapid.T) {
+func (s *SimMachine) delete(t *rapid.T) {
 	key := s.selectKey(t)
 	existingValue, found := s.existingKeys[string(key)]
 	exists := found && existingValue != nil
